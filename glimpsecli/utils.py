@@ -5,7 +5,31 @@ import re
 _GITHUB_URL_REGEX = re.compile(r'^(?:https:\/\/github\.com\/|git@github\.com:)[\w\-]+\/[\w\-]+(?:\.git)?$')
 _GITHUB_URL_OWNER_REPO = r"(?:https?://github\.com/|git@github\.com:)([\w-]+)/([\w-]+?)(?:\.git)?$"
 
+def _parse_github_owner_repo(url: str) -> tuple[str, str]:
+    """Gets owner and repository name from GitHub url.
+
+    [!] Requires valid GitHub url.
+
+    Args:
+        url: GitHub repository url.
+    
+    Returns:
+        Tuple of (owner, repository).
+    """
+    match = re.match(_GITHUB_URL_OWNER_REPO, url.strip())
+    assert match
+    owner, repo = match.groups()
+    return owner, repo
+
+# --- exported
 def get_git_remote_url() -> str | None:
+    """Get git remote repository url from git.
+
+    [!] Uses `git` command.
+
+    Returns:
+        Git remote repository url if was able to fetch it, else `None`.
+    """
     try:
         result = subprocess.run(
             ["git", "remote", "get-url", "origin"],
@@ -36,13 +60,18 @@ def is_valid_repo_url(url: str) -> bool:
     """
     return bool(_GITHUB_URL_REGEX.match(url))
 
-def _parse_github_owner_repo(url: str) -> tuple[str, str]:
-    match = re.match(_GITHUB_URL_OWNER_REPO, url.strip())
-    assert match
-    owner, repo = match.groups()
-    return owner, repo
-
 def create_alt_repo_url(url: str):
+    """Creates alternative GitHub repository url.
+
+    For https urls returns ssh url and the oposite way.
+    [!] Requires valid Github url.
+
+    Args:
+        url: Github repository url.
+
+    Returns:
+        Alternative GitHub repository url.
+    """
     assert is_valid_repo_url(url)
     owner, repo = _parse_github_owner_repo(url)
     if url.startswith("https://"):
@@ -51,12 +80,18 @@ def create_alt_repo_url(url: str):
         return f"https://github.com/{owner}/{repo}.git"
 
 def generate_local_ssh_key() -> tuple[str, str]:
-    """Generates a temporary project-specific SSH key pair locally if it doesn't exist."""
+    """Generates a temporary project-specific SSH key pair locally if it doesn't exist.
+    
+    Keys are generated in directory `.git/shared_repo_keys/` using rsa algorithm.
+    [!] Uses `ssh-keygen` command.
+
+    Returns:
+        Tuple of (private_key, public_key).
+    """
     key_dir = Path(".git") / "shared_repo_keys"
     key_dir.mkdir(parents=True, exist_ok=True)
     private_key_path = key_dir / "id_rsa"
     public_key_path = key_dir / "id_rsa.pub"
-
     if not private_key_path.exists():
         subprocess.run(
             [
@@ -68,17 +103,24 @@ def generate_local_ssh_key() -> tuple[str, str]:
                 "-f",
                 str(private_key_path),
                 "-C",
-                "shared-repo-cli",
+                "git-glimpse-cli",
             ],
             check=True,
             capture_output=True,
         )
-
     private_key = private_key_path.read_text()
     public_key = public_key_path.read_text().strip()
     return private_key, public_key
 
 def enrich_status(status: str) -> str:
+    """Adds color coding for build status codes.
+
+    Args:
+        status: Build status code.
+
+    Returns:
+        Color coded build status code.
+    """
     match status:
         case "pending": return "[bold blue]pending[/bold blue]"
         case "success": return "[bold green]success[/bold green]"

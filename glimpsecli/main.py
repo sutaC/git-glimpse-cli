@@ -1,11 +1,8 @@
-from rich.progress import Progress, SpinnerColumn, TextColumn
-from glimpsecli import config, utils, auth, api
+from glimpsecli import config, utils, api, helpers
 from json import JSONDecodeError
 from rich.panel import Panel
-from pathlib import Path
 from rich import print
 import typer
-import time
 
 app = typer.Typer(help="CLI tool to manage and update shared GitHub repos with GitGlimpse.", no_args_is_help=True)
 
@@ -20,14 +17,14 @@ def login(
     force: bool = typer.Option(False, "--force", "-f", help="Overwrite existing session without prompting.")
     ):
     """Authenticate CLI with server."""
-    existing_token = auth.load_token()
-    if existing_token and not force:
+    conf = config.cliconf_load()
+    if not force and conf and "token" in conf:
         print("[yellow]You are already logged in.[/yellow]")
         if not typer.confirm("Do you want to overwrite your existing session?"):
             print("[dim]Login cancelled.[/dim]")
             raise typer.Exit(0)
     response = api.request_api("/user", token=token)
-    auth.save_token(token)
+    config.cliconf_save(token)
     username =  response.json().get("username")
     print(f"[bold green]Success![/bold green] Authenticated as [cyan]{username}[/cyan].")
 
@@ -43,69 +40,16 @@ def whoami():
 @app.command()
 def logout():
     """Clear stored local credentials."""
-    if not auth.load_token():
+    conf = config.cliconf_load()
+    if not conf or not "token" in conf:
         print("[yellow]You are not currently logged in.[/yellow]")
         raise typer.Exit(0)
-    auth.remove_token()
+    config.cliconf_remove()
     print("[bold green]Logged out successfully. Stored credentials removed.[/bold green]")
 
 # --- init
 init_app = typer.Typer(help="Link or upload the current Git repository to GitGlimpse server.", no_args_is_help=True)
 app.add_typer(init_app, name="init")
-
-def _get_or_prompt_url(url: str | None, detect: bool) -> str:
-    if detect and not url:
-        if not Path(".git").exists():
-            print("[red]Error: Current directory is not a Git repository.[/red]")
-            raise typer.Exit(1)
-        url = utils.get_git_remote_url()
-        if not url:
-            print("[dim]Could not detect GitHub url.[/dim]")
-    if not url:
-        while True:
-            url = typer.prompt("Enter GitHub repository URL (e.g., https://github.com/user/repo.git)")
-            if url: url = url.strip()
-            if url and utils.is_valid_repo_url(url): break
-            print("[bold red]Invalid url, try again...[/bold red]")
-    return url
-
-def _finalize_init(repo_id: str):
-    """Helper to save config and update gitignore."""
-    # Add repo id to local file
-    config.save_repo_config(repo_id)
-    print("[dim]Created local .shared-repo.json configuration file for this repository.[/dim]")
-    # Auto-add to .gitignore
-    gitignore = Path(".gitignore")
-    ignore_entry = "\n.shared-repo.json\n"
-    if gitignore.exists():
-        if ".shared-repo.json" not in gitignore.read_text():
-            with open(gitignore, "a") as f:
-                f.write(ignore_entry)
-            print("[dim]Added .shared-repo.json to .gitignore[/dim]")
-    else:
-        gitignore.write_text(ignore_entry)
-        print("[dim]Created .gitignore and added .shared-repo.json[/dim]")
-
-def _poll_build_status(token: str, repo_id: str):
-    print(f"[dim]Repository build was queued.[/dim]")
-    try:
-        with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True) as progress:
-            task_id = progress.add_task(description="Connecting to server...", total=None)
-            last_status = None
-            while True:
-                poll_response = api.request_api(f"/repos/build/{repo_id}/status", token=token, quiet=True) 
-                status = poll_response.json().get("status")
-                if status != last_status:
-                    progress.update(task_id, description=f"Build status: {utils.enrich_status(status)}")
-                    last_status = status
-                    if status in ["success", "failed", "violation"]: break
-                time.sleep(2)
-    except KeyboardInterrupt:
-        print("\n[yellow]Polling interrupted. The build is still running on the server.[/yellow]")
-        print(f"Check status later at: {api.API_BASE}/repos/details/{repo_id}")
-        raise typer.Exit(0)
-    print(f"Build has finished with status: {utils.enrich_status(status)}")
-    print(f"View details at: {api.API_BASE}/repos/details/{repo_id}")
 
 @init_app.command("link")
 def init_link(
@@ -113,11 +57,11 @@ def init_link(
         detect: bool = typer.Option(True, help="Do you want to detect repository url automatically.")
     ):
     """Link current Git repository to existing one on GitGlimpse."""
-    token = api.get_token()
-    if config.load_repo_config():
+    token = helpers.get_token()
+    if config.repoconf_load():
         print("Shared repository already initialised.")
         raise typer.Exit(0)
-    url = _get_or_prompt_url(url, detect)
+    url = helpers.get_or_prompt_url(url, detect)
     print("[dim]Linking to existing GitGlimpse repository.[/dim]")
     response = api.request_api("/repos/fetch", method="POST", payload={"url": url}, token=token, handle_codes=[200, 404])
     if response.status_code == 404:
@@ -126,7 +70,7 @@ def init_link(
     # response.status_code == 200
     repo_id = response.json().get('repo_id')
     print("[green]Repo was found on GitGlimpse server.[/green]")
-    _finalize_init(repo_id)
+    helpers.finalize_init(repo_id)
     print(f"Repository details: {api.API_BASE}/repos/details/{repo_id}")
 
 @init_app.command("new")
@@ -137,11 +81,11 @@ def init_new(
     detect: bool = typer.Option(True, help="Do you want to detect repository url automatically.")
     ):
     """Upload and register current Git repository to GitGlimpse."""
-    token = api.get_token()
-    if config.load_repo_config():
+    token = helpers.get_token()
+    if config.repoconf_load():
         print("Shared repository already initialised.")
         raise typer.Exit(0)
-    url = _get_or_prompt_url(url, detect)
+    url = helpers.get_or_prompt_url(url, detect)
     print("[dim]Adding repository to GitGlimpse.[/dim]")
     if not force:
         print("[bold]This repository have to be uploaded to GitHub under given url first.[/bold]")
@@ -186,8 +130,8 @@ def init_new(
     # response.status_code == 202
     data = response.json()
     repo_id = data.get('repo_id')
-    _finalize_init(repo_id)
-    _poll_build_status(token, repo_id)
+    helpers.finalize_init(repo_id)
+    helpers.poll_build_status(token, repo_id)
 
 # --- limits
 @app.command()
@@ -209,8 +153,8 @@ def limits():
 @app.command()
 def status():
     """Display status info of current repository."""
-    token = api.get_token()
-    conf = config.get_repo_config()
+    token = helpers.get_token()
+    conf = helpers.get_repo_config()
     response = api.request_api(f"/repos/build/{conf['repo_id']}/status", token=token)
     data = response.json()
     build_status =  data.get("status", "")
@@ -224,12 +168,12 @@ def remove(
         force: bool = typer.Option(False, "--force", "-f", help="Remove without prompting.")
     ):
     """Remove current repository from GitGlimpse."""
-    token = api.get_token()
-    conf = config.get_repo_config()
+    token = helpers.get_token()
+    conf = helpers.get_repo_config()
     print(f"[dim]Current repository id: '{conf['repo_id']}'[/dim]")
     if not force: typer.confirm(f"Are you sure, you want to remove this repository from GitGlimpse?", abort=True)
     api.request_api(f"/repos/remove/{conf['repo_id']}", method="POST", token=token, handle_codes=[204])
-    config.remove_repo_config()
+    config.repoconf_remove()
     print("Removed repository from GitGlimpse.")
 
 # --- build
@@ -238,8 +182,8 @@ def build(
         force: bool = typer.Option(False, "--force", "-f", help="Schedule without prompting.")
     ):
     """Schedule a build for current repository."""
-    token = api.get_token()
-    conf = config.get_repo_config()
+    token = helpers.get_token()
+    conf = helpers.get_repo_config()
     if not force:
         print("Ensure that you pushed recent changes to GitHub.")
         typer.confirm("Continue?", abort=True)
@@ -256,7 +200,7 @@ def build(
         print(f"[yellow]This repository already has a pending build.[/yellow]")
         raise typer.Exit(1)
     # response.status_code == 202
-    _poll_build_status(token, conf['repo_id'])
+    helpers.poll_build_status(token, conf['repo_id'])
 
 # ---
 if __name__ == "__main__":
