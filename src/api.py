@@ -1,6 +1,6 @@
-from json import JSONDecodeError
-
 from rich.progress import Progress, SpinnerColumn, TextColumn
+from contextlib import nullcontext
+from json import JSONDecodeError
 from rich import print
 import typer
 import httpx
@@ -12,7 +12,7 @@ API_URL = f"{API_BASE}/cli"
 def get_token() -> str:
     token = auth.load_token()
     if not token:
-        print("[yellow]Not logged in. Run 'python -m my_cli.main login' first.[/yellow]")
+        print("[yellow]Not logged in. Run 'glimpse login' first.[/yellow]")
         raise typer.Exit(code=1)
     return token
 
@@ -21,12 +21,14 @@ def request_api(
         method: str = "GET",
         token: str | None = None, 
         handle_codes: list[int] = [200],
-        payload: dict | None = None
+        payload: dict | None = None,
+        quiet=False
     ) -> httpx.Response:
     if not token:
         token = get_token()
-    with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True) as progress:
-        progress.add_task(description="[bold green]Connecting to server...[/bold green]", total=None)
+    with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True) if not quiet else nullcontext() as progress:
+        if progress: 
+            progress.add_task(description="[bold green]Connecting to server...[/bold green]", total=None)
         try:
             response = httpx.request(
                 method,
@@ -40,7 +42,16 @@ def request_api(
             raise typer.Exit(1)
     if response.status_code in handle_codes:
         return response
-    elif response.status_code == 401 or response.status_code == 403:
+    elif response.status_code == 401:
+        print("[bold red]Authentication failed: Invalid or revoked token.[/bold red]")
+        try:
+            error = response.json().get("error")
+            if error: print(f"[dim]Error reason: {error}[/dim]")
+        except JSONDecodeError: pass
+        auth.remove_token()
+        print("[yellow]Your session has expired. Please run 'glimpse login' again [/yellow].")
+        raise typer.Exit(1)
+    elif response.status_code == 403:
         print("[bold red]Authentication failed: Invalid or revoked token.[/bold red]")
         try:
             error = response.json().get("error")

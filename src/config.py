@@ -8,7 +8,7 @@ import typer
 CONFIG_FILENAME = ".shared-repo.json"
 
 class Config(TypedDict):
-    repo_id: int
+    repo_id: str
 
 def save_repo_config(repo_id: str, path: Path = Path(".")) -> None:
     config_path = path / CONFIG_FILENAME
@@ -33,6 +33,6 @@ def remove_repo_config(path: Path = Path(".")) -> None:
 def get_repo_config() -> Config:
     conf = load_repo_config()
     if not conf:
-        print("[yellow]Not initialised. Run 'python -m my_cli.main init' first.[/yellow]")
+        print("[yellow]Not initialised. Run 'glimpse init' first.[/yellow]")
         raise typer.Exit(code=1)
     return conf

@@ -51,29 +51,38 @@ def create_alt_repo_url(url: str):
         return f"https://github.com/{owner}/{repo}.git"
 
 def generate_local_ssh_key() -> tuple[str, str]:
-  """Generates a temporary project-specific SSH key pair locally if it doesn't exist."""
-  key_dir = Path(".git") / "shared_repo_keys"
-  key_dir.mkdir(parents=True, exist_ok=True)
-  private_key_path = key_dir / "id_rsa"
-  public_key_path = key_dir / "id_rsa.pub"
+    """Generates a temporary project-specific SSH key pair locally if it doesn't exist."""
+    key_dir = Path(".git") / "shared_repo_keys"
+    key_dir.mkdir(parents=True, exist_ok=True)
+    private_key_path = key_dir / "id_rsa"
+    public_key_path = key_dir / "id_rsa.pub"
 
-  if not private_key_path.exists():
-    subprocess.run(
-        [
-            "ssh-keygen",
-            "-t",
-            "rsa",
-            "-N",
-            "",
-            "-f",
-            str(private_key_path),
-            "-C",
-            "shared-repo-cli",
-        ],
-        check=True,
-        capture_output=True,
-    )
+    if not private_key_path.exists():
+        subprocess.run(
+            [
+                "ssh-keygen",
+                "-t",
+                "rsa",
+                "-N",
+                "",
+                "-f",
+                str(private_key_path),
+                "-C",
+                "shared-repo-cli",
+            ],
+            check=True,
+            capture_output=True,
+        )
 
-  private_key = private_key_path.read_text()
-  public_key = public_key_path.read_text().strip()
-  return private_key, public_key
+    private_key = private_key_path.read_text()
+    public_key = public_key_path.read_text().strip()
+    return private_key, public_key
+
+def enrich_status(status: str) -> str:
+    match status:
+        case "pending": return "[bold blue]pending[/bold blue]"
+        case "success": return "[bold green]success[/bold green]"
+        case "failed": return "[bold red]failed[/bold red]"
+        case "violation": return "[bold magenta]violation[/bold magenta]"
+        case "running": return "[/bold cyan]running[/bold cyan]"
+        case _: return "[bold dim]?[/bold dim]"

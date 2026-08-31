@@ -1,3 +1,4 @@
+from rich.progress import Progress, SpinnerColumn, TextColumn
 from json import JSONDecodeError
 from rich.panel import Panel
 from pathlib import Path
@@ -6,6 +7,7 @@ import config
 import typer
 import utils
 import auth
+import time
 import api
 
 app = typer.Typer(help="CLI tool to manage and update shared GitHub repos with GitGlimpse.", no_args_is_help=True)
@@ -87,6 +89,27 @@ def _finalize_init(repo_id: str):
         gitignore.write_text(ignore_entry)
         print("[dim]Created .gitignore and added .shared-repo.json[/dim]")
 
+def _poll_build_status(token: str, repo_id: str):
+    print(f"[dim]Repository build was queued.[/dim]")
+    try:
+        with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True) as progress:
+            task_id = progress.add_task(description="Connecting to server...", total=None)
+            last_status = None
+            while True:
+                poll_response = api.request_api(f"/repos/build/{repo_id}/status", token=token, quiet=True) 
+                status = poll_response.json().get("status")
+                if status != last_status:
+                    progress.update(task_id, description=f"Build status: {utils.enrich_status(status)}")
+                    last_status = status
+                    if status in ["success", "failed", "violation"]: break
+                time.sleep(2)
+    except KeyboardInterrupt:
+        print("\n[yellow]Polling interrupted. The build is still running on the server.[/yellow]")
+        print(f"Check status later at: {api.API_BASE}/repos/details/{repo_id}")
+        raise typer.Exit(0)
+    print(f"Build has finished with status: {utils.enrich_status(status)}")
+    print(f"View details at: {api.API_BASE}/repos/details/{repo_id}")
+
 @init_app.command("link")
 def init_link(
         url: str | None = typer.Option(None, help="GitHub repository URL."),
@@ -100,24 +123,20 @@ def init_link(
     url = _get_or_prompt_url(url, detect)
     print("[dim]Linking to existing GitGlimpse repository.[/dim]")
     response = api.request_api("/repos/fetch", method="POST", payload={"url": url}, token=token, handle_codes=[200, 404])
-    if response.status_code == 200: # Server already has this repo
-        repo_id = response.json().get("repo_id")
-        if not repo_id:
-            print("[bold red]Did not recieve valid repository id from server.[/bold red]")
-            raise typer.Exit(1)
-        print("[green]Repo was found on GitGlimpse server.[/green]")
-    elif response.status_code == 404: # Server does not have this repo
+    if response.status_code == 404:
         print(f"[bold red]Could not find this repository ([cyan]'{url}'[/cyan]) on GitGlimpse server, provide a valid url.[/bold red]")
         raise typer.Exit(1)
-    else:
-        print(f"[bold red]Unexpected server response code {response.status_code}.[/bold red]")
-        raise typer.Exit(1)
+    # response.status_code == 200
+    repo_id = response.json().get('repo_id')
+    print("[green]Repo was found on GitGlimpse server.[/green]")
     _finalize_init(repo_id)
+    print(f"Repository details: {api.API_BASE}/repos/details/{repo_id}")
 
 @init_app.command("new")
 def init_new(
     url: str | None = typer.Option(None, help="GitHub repository URL."),
     is_private: bool | None = typer.Option(None, "--private/--public", help="Is repository public or private?"),
+    force: bool = typer.Option(False, "--force", "-f", help="Upload without prompting about GitHub publish."),
     detect: bool = typer.Option(True, help="Do you want to detect repository url automatically.")
     ):
     """Upload and register current Git repository to GitGlimpse."""
@@ -127,7 +146,9 @@ def init_new(
         raise typer.Exit(0)
     url = _get_or_prompt_url(url, detect)
     print("[dim]Adding repository to GitGlimpse.[/dim]")
-    print("[bold]This repository [orange]have to be uploaded to GitHub[/orange] under given url first.[/bold]")
+    if not force:
+        print("[bold]This repository have to be uploaded to GitHub under given url first.[/bold]")
+        typer.confirm("Continue?", abort=True)
     # Private/Public
     if is_private is None:
         is_private = typer.confirm("Are you uploading a private repository? (This will require SSH key generation)")
@@ -155,11 +176,7 @@ def init_new(
         token=token, 
         handle_codes=[202, 409, 420]
     )
-    if response.status_code == 202:
-        data = response.json()
-        repo_id = data.get("repo_id")
-        print(f"[bold green]Success![/bold green] Repository was linked, view details at: [cyan]{api.API_BASE}/repos/details/{repo_id}[/cyan]")
-    elif response.status_code == 409:
+    if response.status_code == 409:
         print(f"[yellow]This repository is already registered on the server.[/yellow]")
         raise typer.Exit(1)
     elif response.status_code == 420:
@@ -169,10 +186,11 @@ def init_new(
             if error: print(f"[dim]Error reason: {error}[/dim]")
         except JSONDecodeError: pass
         raise typer.Exit(1)
-    else:
-        print(f"[bold red]Unexpected server response code {response.status_code}.[/bold red]")
-        raise typer.Exit(1)
+    # response.status_code == 202
+    data = response.json()
+    repo_id = data.get('repo_id')
     _finalize_init(repo_id)
+    _poll_build_status(token, repo_id)
 
 # --- limits
 @app.command()
@@ -184,17 +202,24 @@ def limits():
     repo_count = data.get("repo_count")
     build_limit = data.get("build_limit")
     build_count = data.get("build_count")
-    print("User limits:")
-    print(f"Repositories: {f"[red]{repo_count}[/red]/[red]{repo_limit}[/red]" if repo_count == repo_limit else f"{repo_count}/{repo_limit}"}")
-    print(f"Builds: {f"[red]{build_count}[/red]/[red]{build_limit}[/red]" if build_count == build_limit else f"{build_count}/{build_limit}"}")
+    print("[bold]User limits:[/bold]")
+    repo_str = f"[red]{repo_count}[/red]/[red]{repo_limit}[/red]" if repo_count == repo_limit else f"{repo_count}/{repo_limit}"
+    print(f"Repositories: {repo_str}")
+    build_str = f"[red]{build_count}[/red]/[red]{build_limit}[/red]" if build_count == build_limit else f"{build_count}/{build_limit}"
+    print(f"Builds: {build_str}")
 
 # --- status
 @app.command()
 def status():
     """Display status info of current repository."""
+    token = api.get_token()
     conf = config.get_repo_config()
-    print(f"Repository GitGlimpse id: [dark_cyan]{conf["repo_id"]}[/dark_cyan]")
-    print(f"Link to repository details: {api.API_BASE}/repos/details/{conf["repo_id"]}")
+    response = api.request_api(f"/repos/build/{conf['repo_id']}/status", token=token)
+    data = response.json()
+    build_status =  data.get("status", "")
+    print(f"Repository id: [dark_cyan]{conf['repo_id']}[/dark_cyan]")
+    print(f"Build status: {utils.enrich_status(build_status)}")
+    print(f"Repository details: {api.API_BASE}/repos/details/{conf['repo_id']}")
 
 # --- remove
 @app.command()
@@ -223,9 +248,7 @@ def build(
         typer.confirm("Continue?", abort=True)
     print(f"[dim]Scheduling a build for current repository (id: '{conf['repo_id']}')[/dim]")
     response = api.request_api(f"/repos/build/{conf['repo_id']}", method="POST", token=token, handle_codes=[202, 420, 425])
-    if response.status_code == 202:
-        print(f"[bold green]Success![/bold green] Repository build was scheduled, view details at: [cyan]{api.API_BASE}/repos/details/{conf['repo_id']}[/cyan]")
-    elif response.status_code == 420:
+    if response.status_code == 420:
         print(f"[yellow]You have reached your usage limits.[/yellow]")
         try:
             error = response.json().get("error")
@@ -235,9 +258,8 @@ def build(
     elif response.status_code == 425:
         print(f"[yellow]This repository already has a pending build.[/yellow]")
         raise typer.Exit(1)
-    else:
-        print(f"[bold red]Unexpected server response code {response.status_code}.[/bold red]")
-        raise typer.Exit(1)
+    # response.status_code == 202
+    _poll_build_status(token, conf['repo_id'])
 
 # ---
 if __name__ == "__main__":
