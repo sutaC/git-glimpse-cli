@@ -6,11 +6,8 @@ from rich import print
 import typer
 import httpx
 
-API_BASE = "http://127.0.0.1:5000"
-API_URL = f"{API_BASE}/cli"
-
 def request_api(
-        url_path: str,
+        endpoint: str,
         method: str = "GET",
         token: str | None = None, 
         handle_codes: list[int] = [200],
@@ -20,7 +17,7 @@ def request_api(
     """Requests GitGlimpse api.
     
     Args:
-        url_path: Path for api call (should not include `API_URL`).
+        endpoint: Path for api call (should not include `{API_BASE}/cli`).
         method: Http metod to use.
         token: GitGlimpse api token (if not provided will prompt user).
         handle_codes: Response codes on which function will return response.
@@ -32,13 +29,14 @@ def request_api(
     """
     if not token:
         token = helpers.get_token()
+    url = f"{config.get_api_url()}{endpoint}"
     with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True) if not quiet else nullcontext() as progress:
         if progress: 
             progress.add_task(description="[bold green]Connecting to server...[/bold green]", total=None)
         try:
             response = httpx.request(
                 method,
-                f"{API_URL}{url_path}",
+                url,
                 headers={"Authorization": f"Bearer {token}"}, 
                 timeout=10.0,
                 json=payload
@@ -54,7 +52,7 @@ def request_api(
             error = response.json().get("error")
             if error: print(f"[dim]Error reason: {error}[/dim]")
         except JSONDecodeError: pass
-        config.cliconf_remove()
+        config.cliconf_save(token="")
         print("[yellow]Your session has expired. Please run 'glimpse login' again [/yellow].")
         raise typer.Exit(1)
     elif response.status_code == 403:
@@ -65,7 +63,7 @@ def request_api(
         except JSONDecodeError: pass
         raise typer.Exit(1)
     else: 
-        print(f"[bold red]Unexpected error ocurred. [dim](status code: {response.status_code})[/dim][/bold red]")
+        print(f"[bold red]Unexpected error ocurred.\n[dim](status code: {response.status_code})[/dim][/bold red]")
         try:
             error = response.json().get("error")
             if error: print(f"[dim red]Error reason: {error}[/dim red]")

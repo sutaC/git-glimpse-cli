@@ -16,14 +16,14 @@ def login(
         help="Your personal access cli token from dashboard."),
     force: bool = typer.Option(False, "--force", "-f", help="Overwrite existing session without prompting.")
     ):
-    """Authenticate CLI with server."""
+    """Authenticate cli with server."""
     conf = config.cliconf_load()
-    if not force and conf and "token" in conf:
+    if not force and conf and conf.get("token"):
         print("[yellow]You are already logged in.[/yellow]")
         if not typer.confirm("Do you want to overwrite your existing session?"):
             print("[dim]Login cancelled.[/dim]")
             raise typer.Exit(0)
-    response = api.request_api("/user", token=token)
+    response = api.request_api("/cli/user", token=token)
     config.cliconf_save(token)
     username =  response.json().get("username")
     print(f"[bold green]Success![/bold green] Authenticated as [cyan]{username}[/cyan].")
@@ -32,7 +32,7 @@ def login(
 @app.command()
 def whoami():
     """Check the currently logged-in user."""
-    response = api.request_api("/user")
+    response = api.request_api("/cli/user")
     username =  response.json().get("username")
     print(f"Authenticated as [cyan]{username}[/cyan].")
 
@@ -41,11 +41,11 @@ def whoami():
 def logout():
     """Clear stored local credentials."""
     conf = config.cliconf_load()
-    if not conf or not "token" in conf:
+    if not conf or not conf.get("token"):
         print("[yellow]You are not currently logged in.[/yellow]")
         raise typer.Exit(0)
-    config.cliconf_remove()
-    print("[bold green]Logged out successfully. Stored credentials removed.[/bold green]")
+    config.cliconf_save(token="")
+    print("[bold green]Logged out successfully.[/bold green]\nStored credentials removed.")
 
 # --- init
 init_app = typer.Typer(help="Link or upload the current Git repository to GitGlimpse server.", no_args_is_help=True)
@@ -63,7 +63,7 @@ def init_link(
         raise typer.Exit(0)
     url = helpers.get_or_prompt_url(url, detect)
     print("[dim]Linking to existing GitGlimpse repository.[/dim]")
-    response = api.request_api("/repos/fetch", method="POST", payload={"url": url}, token=token, handle_codes=[200, 404])
+    response = api.request_api("/cli/repos/fetch", method="POST", payload={"url": url}, token=token, handle_codes=[200, 404])
     if response.status_code == 404:
         print(f"[bold red]Could not find this repository ([cyan]'{url}'[/cyan]) on GitGlimpse server, provide a valid url.[/bold red]")
         raise typer.Exit(1)
@@ -71,7 +71,7 @@ def init_link(
     repo_id = response.json().get('repo_id')
     print("[green]Repo was found on GitGlimpse server.[/green]")
     helpers.finalize_init(repo_id)
-    print(f"Repository details: {api.API_BASE}/repos/details/{repo_id}")
+    print(f"Repository details: {config.get_api_url()}/repos/details/{repo_id}")
 
 @init_app.command("new")
 def init_new(
@@ -111,7 +111,7 @@ def init_new(
         private_key = None
     # Upload
     response = api.request_api(
-        "/repos/add", 
+        "/cli/repos/add", 
         method="POST", 
         payload={"url": url, "ssh_key": private_key}, 
         token=token, 
@@ -137,7 +137,7 @@ def init_new(
 @app.command()
 def limits():
     """Display user build and repository limits."""
-    response = api.request_api("/user/limits")
+    response = api.request_api("/cli/user/limits")
     data = response.json()
     repo_limit = data.get("repo_limit")
     repo_count = data.get("repo_count")
@@ -155,12 +155,12 @@ def status():
     """Display status info of current repository."""
     token = helpers.get_token()
     conf = helpers.get_repo_config()
-    response = api.request_api(f"/repos/build/{conf['repo_id']}/status", token=token)
+    response = api.request_api(f"/cli/repos/build/{conf['repo_id']}/status", token=token)
     data = response.json()
     build_status =  data.get("status", "")
     print(f"Repository id: [dark_cyan]{conf['repo_id']}[/dark_cyan]")
     print(f"Build status: {utils.enrich_status(build_status)}")
-    print(f"Repository details: {api.API_BASE}/repos/details/{conf['repo_id']}")
+    print(f"Repository details: {config.get_api_url()}/repos/details/{conf['repo_id']}")
 
 # --- remove
 @app.command()
@@ -172,7 +172,7 @@ def remove(
     conf = helpers.get_repo_config()
     print(f"[dim]Current repository id: '{conf['repo_id']}'[/dim]")
     if not force: typer.confirm(f"Are you sure, you want to remove this repository from GitGlimpse?", abort=True)
-    api.request_api(f"/repos/remove/{conf['repo_id']}", method="POST", token=token, handle_codes=[204])
+    api.request_api(f"/cli/repos/remove/{conf['repo_id']}", method="POST", token=token, handle_codes=[204])
     config.repoconf_remove()
     print("Removed repository from GitGlimpse.")
 
@@ -188,7 +188,7 @@ def build(
         print("Ensure that you pushed recent changes to GitHub.")
         typer.confirm("Continue?", abort=True)
     print(f"[dim]Scheduling a build for current repository (id: '{conf['repo_id']}')[/dim]")
-    response = api.request_api(f"/repos/build/{conf['repo_id']}", method="POST", token=token, handle_codes=[202, 420, 425])
+    response = api.request_api(f"/cli/repos/build/{conf['repo_id']}", method="POST", token=token, handle_codes=[202, 420, 425])
     if response.status_code == 420:
         print(f"[yellow]You have reached your usage limits.[/yellow]")
         try:
@@ -201,6 +201,28 @@ def build(
         raise typer.Exit(1)
     # response.status_code == 202
     helpers.poll_build_status(token, conf['repo_id'])
+
+# --- config
+config_app = typer.Typer(help="Configure your cli.", no_args_is_help=True)
+app.add_typer(config_app, name="config")
+
+@config_app.command("set-url")
+def config_set_url(
+    url: str = typer.Argument(..., help="Api base url (e.g., http://localhost:8000 or https://gitglimpse.sutac.pl)")
+):
+    """Set the active api server url."""
+    config.cliconf_save(api_url=url)
+    if url:
+        print(f"Api url updated to: {url}")
+    else:
+        print("Api url unset.")
+
+@config_app.command("get-url")
+def config_get_url():
+    """Get the active api server url."""
+    conf = config.cliconf_load() or {}
+    url = conf.get("api_url")
+    if url: print(url)
 
 # ---
 if __name__ == "__main__":

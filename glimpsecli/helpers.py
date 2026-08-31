@@ -74,10 +74,10 @@ def poll_build_status(token: str, repo_id: str) -> None:
                 time.sleep(2)
     except KeyboardInterrupt:
         print("\n[yellow]Polling interrupted. The build is still running on the server.[/yellow]")
-        print(f"Check status later at: {api.API_BASE}/repos/details/{repo_id}")
+        print(f"Check status later at: {config.get_api_url()}/repos/details/{repo_id}")
         raise typer.Exit(0)
     print(f"Build has finished with status: {utils.enrich_status(status)}")
-    print(f"View details at: {api.API_BASE}/repos/details/{repo_id}")
+    print(f"View details at: {config.get_api_url()}/repos/details/{repo_id}")
 
 def get_repo_config() -> config.RepoConfig:
     """Helper for getting repository config."""
@@ -89,8 +89,9 @@ def get_repo_config() -> config.RepoConfig:
 
 def get_token() -> str:
     """Helper for getting api token."""
-    conf = config.cliconf_load()
-    if not conf or not "token" in conf:
+    conf = config.cliconf_load() or {}
+    token = conf.get("token")
+    if not conf or not token:
         print("[yellow]Not logged in. Run 'glimpse login' first.[/yellow]")
         raise typer.Exit(code=1)
-    return conf.get("token")
+    return token
