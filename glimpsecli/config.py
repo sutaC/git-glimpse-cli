@@ -1,9 +1,8 @@
 from typing import TypedDict
 from pathlib import Path
 from rich import print
-import json
-
 import typer
+import json
 
 CONFIG_FILENAME = ".shared-repo.json"
 

@@ -1,10 +1,10 @@
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from contextlib import nullcontext
 from json import JSONDecodeError
+from glimpsecli import auth
 from rich import print
 import typer
 import httpx
-import auth
 
 API_BASE = "http://127.0.0.1:5000"
 API_URL = f"{API_BASE}/cli"

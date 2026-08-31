@@ -1,4 +1,7 @@
+# --- Directories
 .venv/
 __pycache__/
+*.egg-info/
+# --- Files
 *.env*
 .shared-repo.json

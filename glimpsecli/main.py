@@ -1,14 +1,11 @@
 from rich.progress import Progress, SpinnerColumn, TextColumn
+from glimpsecli import config, utils, auth, api
 from json import JSONDecodeError
 from rich.panel import Panel
 from pathlib import Path
 from rich import print
-import config
 import typer
-import utils
-import auth
 import time
-import api
 
 app = typer.Typer(help="CLI tool to manage and update shared GitHub repos with GitGlimpse.", no_args_is_help=True)
 
