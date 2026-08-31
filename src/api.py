@@ -46,11 +46,11 @@ def request_api(
             error = response.json().get("error")
             if error: print(f"[dim]Error reason: {error}[/dim]")
         except JSONDecodeError: pass
-        raise typer.Exit(code=1)
+        raise typer.Exit(1)
     else: 
-        print("[bold red]Unexpected error ocurred.[/bold red]")
+        print(f"[bold red]Unexpected error ocurred. [dim](status code: {response.status_code})[/dim][/bold red]")
         try:
             error = response.json().get("error")
             if error: print(f"[dim red]Error reason: {error}[/dim red]")
         except JSONDecodeError: pass
-        raise typer.Exit(code=1)
+        raise typer.Exit(1)

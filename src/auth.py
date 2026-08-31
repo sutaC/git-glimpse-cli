@@ -19,5 +19,4 @@ def load_token() -> str | None:
         return None
 
 def remove_token() -> None:
-    if CONFIG_FILE.exists():
-        CONFIG_FILE.unlink()
+    CONFIG_FILE.unlink(missing_ok=True)
