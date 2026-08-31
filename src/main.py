@@ -1,21 +1,16 @@
 from json import JSONDecodeError
-
 from rich.panel import Panel
 from pathlib import Path
 from rich import print
-from enum import Enum
 import config
 import typer
 import utils
 import auth
 import api
 
-class InitType(str, Enum):
-    new = "new"
-    link = "link"
-
 app = typer.Typer(help="CLI tool to manage and update shared GitHub repos with GitGlimpse.", no_args_is_help=True)
 
+# --- login
 @app.command()
 def login(
     token: str = typer.Option(
@@ -37,6 +32,7 @@ def login(
     username =  response.json().get("username")
     print(f"[bold green]Success![/bold green] Authenticated as [cyan]{username}[/cyan].")
 
+# --- whoami
 @app.command()
 def whoami():
     """Check the currently logged-in user."""
@@ -44,6 +40,7 @@ def whoami():
     username =  response.json().get("username")
     print(f"Authenticated as [cyan]{username}[/cyan].")
 
+# --- logout
 @app.command()
 def logout():
     """Clear stored local credentials."""
@@ -53,106 +50,131 @@ def logout():
     auth.remove_token()
     print("[bold green]Logged out successfully. Stored credentials removed.[/bold green]")
 
-@app.command()
-def init(
-    url: str | None = typer.Option(None, help="GitHub repository URL."),
-    type: InitType | None = typer.Option(None, help="Initialise new repository or link to existing one."),
-    is_private: bool | None = typer.Option(None, "--private/--public", help="Is repository public or private? (only with '--type new')"),
-    detect: bool = typer.Option(True, help="Do you want to detect repository url automatically.")
-    ):
-    """Link or upload the current Git repository to GitGlimpse server."""
-    token = api.get_token()
-    if config.load_repo_config():
-        print("Shared repository already initialised.")
-        raise typer.Exit(0)
+# --- init
+init_app = typer.Typer(help="Link or upload the current Git repository to GitGlimpse server.", no_args_is_help=True)
+app.add_typer(init_app, name="init")
+
+def _get_or_prompt_url(url: str | None, detect: bool) -> str:
     if detect and not url:
         if not Path(".git").exists():
             print("[red]Error: Current directory is not a Git repository.[/red]")
-            raise typer.Exit(code=1)
+            raise typer.Exit(1)
         url = utils.get_git_remote_url()
         if not url:
             print("[dim]Could not detect GitHub url.[/dim]")
     if not url:
         while True:
             url = typer.prompt("Enter GitHub repository URL (e.g., https://github.com/user/repo.git)")
+            if url: url = url.strip()
             if url and utils.is_valid_repo_url(url): break
             print("[bold red]Invalid url, try again...[/bold red]")
-    if not type:
-        type = typer.prompt(
-            "Do you want to upload new repository to GitGlimpse or link to repository on the server? [new/link]",
-            type=InitType
-        )
-    if type == InitType.link:
-        print("[dim]Linking to existing GitGlimpse repository.[/dim]")
-        if is_private is not None:
-            print("[dim]Used --private/--public option is beeing omited.[/dim]")
-        response = api.request_api("/repos/fetch", method="POST", payload={"url": url}, token=token, handle_codes=[200, 404])
-        if response.status_code == 200: # Server already has this repo
-            repo_id = response.json().get("repo_id")
-            if not repo_id:
-                print("[bold red]Did not recieve valid repository id from server.[/bold red]")
-                raise typer.Exit(1)
-            print("[green]Repo was found on GitGlimpse server.[/green]")
-        elif response.status_code == 404: # Server does not have this repo
-            print(f"[bold red]Could not find this repository ([cyan]'{url}'[/cyan]) on GitGlimpse server, provide a valid url.[/bold red]")
-            raise typer.Exit(1)
-        else:
-            print(f"[bold red]Unexpected server response code {response.status_code}.[/bold red]")
-            raise typer.Exit(1)
-    elif type == InitType.new:
-        print("[dim]Adding repository to GitGlimpse.[/dim]")
-        print("[bold]This repository [orange]have to be uploaded to GitHub[/orange] under given url first.[/bold]")
-        # Private/Public
-        if is_private is None:
-            is_private = typer.confirm("Are you uploading a private repository? (This will require SSH key generation)")
-        if is_private: # Private
-            print("[dim]Generating local SSH keys at '.git/shared_repo_keys/'.[/dim]")
-            try:
-                private_key, public_key = utils.generate_local_ssh_key()
-            except Exception as e:
-                print(f"[red]Failed to generate local SSH key: {e}[/red]")
-                raise typer.Exit(code=1)
-            print("\n[bold yellow]Action Required:[/bold yellow] Add this deploy key to your GitHub repository settings ([dim]Settings > Deploy keys > Add deploy key[/dim]):")
-            print(Panel(public_key, title="Public Deploy Key", border_style="yellow"))
-            typer.confirm("Continue?", abort=True)
-            if url.startswith("https://"):
-                url = utils.create_alt_repo_url(url)
-        else: # Public
-            if not url.startswith("https://"):
-                url = utils.create_alt_repo_url(url)
-            private_key = None
-        # Upload
-        response = api.request_api(
-            "/repos/add", 
-            method="POST", 
-            payload={"url": url, "ssh_key": private_key}, 
-            token=token, 
-            handle_codes=[202, 409, 420]
-        )
-        if response.status_code == 202:
-            data = response.json()
-            repo_id = data.get("repo_id")
-            print(f"[bold green]Success![/bold green] Repository was linked, view details at: [cyan]{api.API_BASE}/repos/details/{repo_id}[/cyan]")
-        elif response.status_code == 409:
-            print(f"[yellow]This repository is already registered on the server.[/yellow]")
-            raise typer.Exit(1)
-        elif response.status_code == 420:
-            print(f"[yellow]You have reached your usage limits.[/yellow]")
-            try:
-                error = response.json().get("error")
-                if error: print(f"[dim]Error reason: {error}[/dim]")
-            except JSONDecodeError: pass
-            raise typer.Exit(1)
-        else:
-            print(f"[bold red]Unexpected server response code {response.status_code}.[/bold red]")
-            raise typer.Exit(1)
-    else:
-        print("[red]Unexpected init option.[/red]")
-        raise typer.Exit(1)
+    return url
+
+def _finalize_init(repo_id: str):
+    """Helper to save config and update gitignore."""
     # Add repo id to local file
     config.save_repo_config(repo_id)
     print("[dim]Created local .shared-repo.json configuration file for this repository.[/dim]")
+    # Auto-add to .gitignore
+    gitignore = Path(".gitignore")
+    ignore_entry = "\n.shared-repo.json\n"
+    if gitignore.exists():
+        if ".shared-repo.json" not in gitignore.read_text():
+            with open(gitignore, "a") as f:
+                f.write(ignore_entry)
+            print("[dim]Added .shared-repo.json to .gitignore[/dim]")
+    else:
+        gitignore.write_text(ignore_entry)
+        print("[dim]Created .gitignore and added .shared-repo.json[/dim]")
 
+@init_app.command("link")
+def init_link(
+        url: str | None = typer.Option(None, help="GitHub repository URL."),
+        detect: bool = typer.Option(True, help="Do you want to detect repository url automatically.")
+    ):
+    """Link current Git repository to existing one on GitGlimpse."""
+    token = api.get_token()
+    if config.load_repo_config():
+        print("Shared repository already initialised.")
+        raise typer.Exit(0)
+    url = _get_or_prompt_url(url, detect)
+    print("[dim]Linking to existing GitGlimpse repository.[/dim]")
+    response = api.request_api("/repos/fetch", method="POST", payload={"url": url}, token=token, handle_codes=[200, 404])
+    if response.status_code == 200: # Server already has this repo
+        repo_id = response.json().get("repo_id")
+        if not repo_id:
+            print("[bold red]Did not recieve valid repository id from server.[/bold red]")
+            raise typer.Exit(1)
+        print("[green]Repo was found on GitGlimpse server.[/green]")
+    elif response.status_code == 404: # Server does not have this repo
+        print(f"[bold red]Could not find this repository ([cyan]'{url}'[/cyan]) on GitGlimpse server, provide a valid url.[/bold red]")
+        raise typer.Exit(1)
+    else:
+        print(f"[bold red]Unexpected server response code {response.status_code}.[/bold red]")
+        raise typer.Exit(1)
+    _finalize_init(repo_id)
+
+@init_app.command("new")
+def init_new(
+    url: str | None = typer.Option(None, help="GitHub repository URL."),
+    is_private: bool | None = typer.Option(None, "--private/--public", help="Is repository public or private?"),
+    detect: bool = typer.Option(True, help="Do you want to detect repository url automatically.")
+    ):
+    """Upload and register current Git repository to GitGlimpse."""
+    token = api.get_token()
+    if config.load_repo_config():
+        print("Shared repository already initialised.")
+        raise typer.Exit(0)
+    url = _get_or_prompt_url(url, detect)
+    print("[dim]Adding repository to GitGlimpse.[/dim]")
+    print("[bold]This repository [orange]have to be uploaded to GitHub[/orange] under given url first.[/bold]")
+    # Private/Public
+    if is_private is None:
+        is_private = typer.confirm("Are you uploading a private repository? (This will require SSH key generation)")
+    if is_private: # Private
+        print("[dim]Generating local SSH keys at '.git/shared_repo_keys/'.[/dim]")
+        try:
+            private_key, public_key = utils.generate_local_ssh_key()
+        except Exception as e:
+            print(f"[red]Failed to generate local SSH key: {e}[/red]")
+            raise typer.Exit(code=1)
+        print("\n[bold yellow]Action Required:[/bold yellow] Add this deploy key to your GitHub repository settings ([dim]Settings > Deploy keys > Add deploy key[/dim]):")
+        print(Panel(public_key, title="Public Deploy Key", border_style="yellow"))
+        typer.confirm("Continue?", abort=True)
+        if url.startswith("https://"):
+            url = utils.create_alt_repo_url(url)
+    else: # Public
+        if not url.startswith("https://"):
+            url = utils.create_alt_repo_url(url)
+        private_key = None
+    # Upload
+    response = api.request_api(
+        "/repos/add", 
+        method="POST", 
+        payload={"url": url, "ssh_key": private_key}, 
+        token=token, 
+        handle_codes=[202, 409, 420]
+    )
+    if response.status_code == 202:
+        data = response.json()
+        repo_id = data.get("repo_id")
+        print(f"[bold green]Success![/bold green] Repository was linked, view details at: [cyan]{api.API_BASE}/repos/details/{repo_id}[/cyan]")
+    elif response.status_code == 409:
+        print(f"[yellow]This repository is already registered on the server.[/yellow]")
+        raise typer.Exit(1)
+    elif response.status_code == 420:
+        print(f"[yellow]You have reached your usage limits.[/yellow]")
+        try:
+            error = response.json().get("error")
+            if error: print(f"[dim]Error reason: {error}[/dim]")
+        except JSONDecodeError: pass
+        raise typer.Exit(1)
+    else:
+        print(f"[bold red]Unexpected server response code {response.status_code}.[/bold red]")
+        raise typer.Exit(1)
+    _finalize_init(repo_id)
+
+# --- limits
 @app.command()
 def limits():
     """Display user build and repository limits."""
@@ -166,6 +188,7 @@ def limits():
     print(f"Repositories: {f"[red]{repo_count}[/red]/[red]{repo_limit}[/red]" if repo_count == repo_limit else f"{repo_count}/{repo_limit}"}")
     print(f"Builds: {f"[red]{build_count}[/red]/[red]{build_limit}[/red]" if build_count == build_limit else f"{build_count}/{build_limit}"}")
 
+# --- status
 @app.command()
 def status():
     """Display status info of current repository."""
@@ -173,6 +196,7 @@ def status():
     print(f"Repository GitGlimpse id: [dark_cyan]{conf["repo_id"]}[/dark_cyan]")
     print(f"Link to repository details: {api.API_BASE}/repos/details/{conf["repo_id"]}")
 
+# --- remove
 @app.command()
 def remove(
         force: bool = typer.Option(False, "--force", "-f", help="Remove without prompting.")
@@ -186,6 +210,7 @@ def remove(
     config.remove_repo_config()
     print("Removed repository from GitGlimpse.")
 
+# --- build
 @app.command()
 def build(
         force: bool = typer.Option(False, "--force", "-f", help="Schedule without prompting.")
@@ -214,5 +239,6 @@ def build(
         print(f"[bold red]Unexpected server response code {response.status_code}.[/bold red]")
         raise typer.Exit(1)
 
+# ---
 if __name__ == "__main__":
     app()
