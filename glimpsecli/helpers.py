@@ -65,7 +65,7 @@ def poll_build_status(token: str, repo_id: str) -> None:
             task_id = progress.add_task(description="Connecting to server...", total=None)
             last_status = None
             while True:
-                poll_response = api.request_api(f"/repos/build/{repo_id}/status", token=token, quiet=True) 
+                poll_response = api.request_api(f"/cli/repos/build/{repo_id}/status", token=token, quiet=True) 
                 status = poll_response.json().get("status")
                 if status != last_status:
                     progress.update(task_id, description=f"Build status: {utils.enrich_status(status)}")
