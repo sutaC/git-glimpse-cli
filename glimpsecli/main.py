@@ -2,9 +2,28 @@ from glimpsecli import config, utils, api, helpers
 from json import JSONDecodeError
 from rich.panel import Panel
 from rich import print
+import importlib.metadata
 import typer
+import sys
+
+_DEBUG_MODE = True
 
 app = typer.Typer(help="CLI tool to manage and update shared GitHub repos with GitGlimpse.", no_args_is_help=True)
+
+# --- main
+def version_callback(value: bool) -> None:
+    """Display version of package."""
+    if not value: return
+    version = importlib.metadata.metadata("git-glimpse-cli").get("version")
+    print(f"GitGlimpse CLI version: {version or "?"}")
+    raise typer.Exit(0)
+
+@app.callback()
+def main(
+        version: bool = typer.Option(None, "--version", callback=version_callback, is_eager=True, help="Display version of package.")
+    ):
+    """GitGlimpse CLI."""
+    pass
 
 # --- login
 @app.command()
@@ -224,6 +243,28 @@ def config_get_url():
     url = conf.get("api_url")
     if url: print(url)
 
+@config_app.command("debug")
+def config_debug(
+    enabled: bool = typer.Argument(..., help="True to enable debug mode, False to disable.")
+):
+    """Enable or disable verbose debug output and full crash stack traces."""
+    config.cliconf_save(debug=enabled)
+    status = "[bold green]enabled[/bold green]" if enabled else "[bold yellow]disabled[/bold yellow]"
+    print(f"Debug mode {status}.")
+
 # ---
+def cli():
+    try:
+        app()
+    except Exception as exc:
+        if isinstance(exc, typer.Exit):
+            raise exc
+        if config.get_debug_mode(): 
+            print("[bold yellow][DEBUG MODE ACTIVE] Full stack trace below:[/bold yellow]\n")
+            raise exc
+        print(f"[bold red]Fatal Error:[/bold red] {str(exc)}")
+        print("[dim]Enable debug with 'glimpse config debug' for full diagnostic details.[/dim]")
+        sys.exit(1)
+
 if __name__ == "__main__":
-    app()
+    cli()

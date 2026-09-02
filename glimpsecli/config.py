@@ -55,10 +55,12 @@ def repoconf_remove(path: Path = Path(".")) -> None:
 class CliConfig(TypedDict, total=False):
     token: str
     api_url: str
+    debug: bool
 
 def cliconf_save(
         token: str | None = None, 
-        api_url: str | None = None
+        api_url: str | None = None,
+        debug: bool | None = None
     ) -> None:
     """Saves or updates cli config safely.
     
@@ -69,10 +71,12 @@ def cliconf_save(
     conf = cliconf_load() or {}
     if token is not None:
         if token: conf["token"] = token
-        else: conf.pop("token")
+        elif "token" in conf: conf.pop("token")
     if api_url is not None:
         if api_url: conf["api_url"] = api_url.rstrip("/")
-        else: conf.pop("api_url")
+        elif "api_url" in conf: conf.pop("api_url")
+    if debug is not None:
+        conf["debug"] = debug
     with open(CLI_CONFIG_FILE, "w") as f:
         json.dump(conf, f, indent=2)
 
@@ -95,14 +99,18 @@ def cliconf_remove() -> None:
     CLI_CONFIG_FILE.unlink(missing_ok=True)
 
 def get_api_url() -> str:
-    """Resolves active api url using hierarchy: Env Var > User Config > Default.
+    """Resolves active api url
     
     Returns:
         Active api url.
     """
-    if env_url := os.getenv("GITGLIMPSE_API_URL"):
-        return env_url.rstrip("/")
     if conf := cliconf_load():
         if user_url := conf.get("api_url"):
             return user_url.rstrip("/")
     return DEFAULT_API_URL
+
+def get_debug_mode() -> bool:
+    """Returns True if debug is enabled in user config, else False."""
+    if conf := cliconf_load():
+        return conf.get("debug", False)
+    return False
