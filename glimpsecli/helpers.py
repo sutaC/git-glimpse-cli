@@ -5,7 +5,6 @@ from rich import print
 import typer
 import time
 
-
 def get_or_prompt_url(url: str | None = None, detect: bool = True) -> str:
     """Helper to get GitHub repository url.
     
@@ -38,7 +37,7 @@ def finalize_init(repo_id: str) -> None:
         repo_id: Repository GitGlimpse id.
     """
     # Add repo id to local file
-    config.repoconf_save(repo_id)
+    config.conf_save({"repo_id": repo_id}, local=True)
     print("[dim]Created local .shared-repo.json configuration file for this repository.[/dim]")
     # Auto-add to .gitignore
     gitignore = Path(".gitignore")
@@ -79,19 +78,18 @@ def poll_build_status(token: str, repo_id: str) -> None:
     print(f"Build has finished with status: {utils.enrich_status(status)}")
     print(f"View details at: {config.get_api_url()}/repos/details/{repo_id}")
 
-def get_repo_config() -> config.RepoConfig:
+def fget_repo_id() -> str:
     """Helper for getting repository config."""
-    conf = config.repoconf_load()
-    if not conf:
+    repo_id = config.get_repo_id()
+    if not repo_id:
         print("[yellow]Not initialised. Run 'glimpse init' first.[/yellow]")
         raise typer.Exit(1)
-    return conf
+    return repo_id
 
-def get_token() -> str:
+def fget_token() -> str:
     """Helper for getting api token."""
-    conf = config.cliconf_load() or {}
-    token = conf.get("token")
-    if not conf or not token:
+    token = config.get_token()
+    if not token:
         print("[yellow]Not logged in. Run 'glimpse login' first.[/yellow]")
         raise typer.Exit(code=1)
     return token

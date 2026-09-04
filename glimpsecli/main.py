@@ -33,17 +33,19 @@ def login(
         prompt="Enter your CLI token", 
         hide_input=True, 
         help="Your personal access cli token from dashboard."),
-    force: bool = typer.Option(False, "--force", "-f", help="Overwrite existing session without prompting.")
+        force: bool = typer.Option(False, "--force", "-f", help="Overwrite existing session without prompting."),
+        local: bool = typer.Option(False, "--local", "-l", help="Save config to local repository only.")
     ):
     """Authenticate cli with server."""
-    conf = config.cliconf_load()
-    if not force and conf and conf.get("token"):
+    if local: old_token = (config._repoconf_load() or {}).get("token")
+    else: old_token = (config._cliconf_load() or {}).get("token")
+    if not force and old_token:
         print("[yellow]You are already logged in.[/yellow]")
         if not typer.confirm("Do you want to overwrite your existing session?"):
             print("[dim]Login cancelled.[/dim]")
             raise typer.Exit(0)
     response = api.request_api("/cli/user", token=token)
-    config.cliconf_save(token)
+    config.conf_save({"token": token}, local)
     username =  response.json().get("username")
     print(f"[bold green]Success![/bold green] Authenticated as [cyan]{username}[/cyan].")
 
@@ -57,13 +59,16 @@ def whoami():
 
 # --- logout
 @app.command()
-def logout():
+def logout(
+        local: bool = typer.Option(False, "--local", "-l", help="Alter config in local repository only.")
+    ):
     """Clear stored local credentials."""
-    conf = config.cliconf_load()
-    if not conf or not conf.get("token"):
+    if local: token = (config._repoconf_load() or {}).get("token")
+    else: token = (config._cliconf_load() or {}).get("token")
+    if not token:
         print("[yellow]You are not currently logged in.[/yellow]")
         raise typer.Exit(0)
-    config.cliconf_save(token="")
+    config.conf_save({"token": None})
     print("[bold green]Logged out successfully.[/bold green]\nStored credentials removed.")
 
 # --- init
@@ -76,8 +81,8 @@ def init_link(
         detect: bool = typer.Option(True, help="Do you want to detect repository url automatically.")
     ):
     """Link current Git repository to existing one on GitGlimpse."""
-    token = helpers.get_token()
-    if config.repoconf_load():
+    token = helpers.fget_token()
+    if config.get_repo_id():
         print("Shared repository already initialised.")
         raise typer.Exit(0)
     url = helpers.get_or_prompt_url(url, detect)
@@ -100,8 +105,8 @@ def init_new(
     detect: bool = typer.Option(True, help="Do you want to detect repository url automatically.")
     ):
     """Upload and register current Git repository to GitGlimpse."""
-    token = helpers.get_token()
-    if config.repoconf_load():
+    token = helpers.fget_token()
+    if config.get_repo_id():
         print("Shared repository already initialised.")
         raise typer.Exit(0)
     url = helpers.get_or_prompt_url(url, detect)
@@ -172,14 +177,14 @@ def limits():
 @app.command()
 def status():
     """Display status info of current repository."""
-    token = helpers.get_token()
-    conf = helpers.get_repo_config()
-    response = api.request_api(f"/cli/repos/build/{conf['repo_id']}/status", token=token)
+    token = helpers.fget_token()
+    repo_id = helpers.fget_repo_id()
+    response = api.request_api(f"/cli/repos/build/{repo_id}/status", token=token)
     data = response.json()
     build_status =  data.get("status", "")
-    print(f"Repository id: [dark_cyan]{conf['repo_id']}[/dark_cyan]")
+    print(f"Repository id: [dark_cyan]{repo_id}[/dark_cyan]")
     print(f"Build status: {utils.enrich_status(build_status)}")
-    print(f"Repository details: {config.get_api_url()}/repos/details/{conf['repo_id']}")
+    print(f"Repository details: {config.get_api_url()}/repos/details/{repo_id}")
 
 # --- remove
 @app.command()
@@ -187,11 +192,11 @@ def remove(
         force: bool = typer.Option(False, "--force", "-f", help="Remove without prompting.")
     ):
     """Remove current repository from GitGlimpse."""
-    token = helpers.get_token()
-    conf = helpers.get_repo_config()
-    print(f"[dim]Current repository id: '{conf['repo_id']}'[/dim]")
+    token = helpers.fget_token()
+    repo_id = helpers.fget_repo_id()
+    print(f"[dim]Current repository id: '{repo_id}'[/dim]")
     if not force: typer.confirm(f"Are you sure, you want to remove this repository from GitGlimpse?", abort=True)
-    api.request_api(f"/cli/repos/remove/{conf['repo_id']}", method="POST", token=token, handle_codes=[204])
+    api.request_api(f"/cli/repos/remove/{repo_id}", method="POST", token=token, handle_codes=[204])
     config.repoconf_remove()
     print("Removed repository from GitGlimpse.")
 
@@ -201,13 +206,13 @@ def build(
         force: bool = typer.Option(False, "--force", "-f", help="Schedule without prompting.")
     ):
     """Schedule a build for current repository."""
-    token = helpers.get_token()
-    conf = helpers.get_repo_config()
+    token = helpers.fget_token()
+    repo_id = helpers.fget_repo_id()
     if not force:
         print("Ensure that you pushed recent changes to GitHub.")
         typer.confirm("Continue?", abort=True)
-    print(f"[dim]Scheduling a build for current repository (id: '{conf['repo_id']}')[/dim]")
-    response = api.request_api(f"/cli/repos/build/{conf['repo_id']}", method="POST", token=token, handle_codes=[202, 420, 425])
+    print(f"[dim]Scheduling a build for current repository (id: '{repo_id}')[/dim]")
+    response = api.request_api(f"/cli/repos/build/{repo_id}", method="POST", token=token, handle_codes=[202, 420, 425])
     if response.status_code == 420:
         print(f"[yellow]You have reached your usage limits.[/yellow]")
         try:
@@ -219,36 +224,56 @@ def build(
         print(f"[yellow]This repository already has a pending build.[/yellow]")
         raise typer.Exit(1)
     # response.status_code == 202
-    helpers.poll_build_status(token, conf['repo_id'])
+    helpers.poll_build_status(token, repo_id)
 
 # --- config
 config_app = typer.Typer(help="Configure your cli.", no_args_is_help=True)
 app.add_typer(config_app, name="config")
 
-@config_app.command("set-url")
-def config_set_url(
-    url: str = typer.Argument(..., help="Api base url (e.g., http://localhost:8000 or https://gitglimpse.sutac.pl)")
+@config_app.command("list")
+def config_list(
+        sensitive: bool = typer.Option(False, "--show-sensitive", help="Display sensitive data."),
+        local: bool = typer.Option(None, "--local/--global", help="Display only local or global config.")
+    ):
+    """Get current cli config."""
+    sensitive_keys = ["token", "repo_id"]
+    lconf = config._repoconf_load() or {}
+    gconf = config._cliconf_load() or {}
+    if local is None:
+        print("[bold]Current cli config[/bold]")
+    elif local:
+        print("[bold]Current LOCAL cli config[/bold]")
+    else:
+        print("[bold]Current GLOBAL cli config[/bold]")
+    if local != False:
+        for key, val in lconf.items():
+            val = f"[dim][{key.upper()}][/dim]" if not sensitive and key in sensitive_keys else val
+            print(f"{key}: {val}")
+    if local != True:
+        for key, val in gconf.items():
+            if local is None and key in lconf: continue
+            val = f"[dim][{key.upper()}][/dim]" if not sensitive and key in sensitive_keys else val
+            print(f"{key}: {val}")
+
+@config_app.command("url")
+def config_url(
+    url: str = typer.Argument(..., help="Api base url (e.g., http://localhost:8000 or https://gitglimpse.sutac.pl)"),
+    local: bool = typer.Option(False, "--local", "-l", help="Save config to local repository only.")
 ):
     """Set the active api server url."""
-    config.cliconf_save(api_url=url)
+    config.conf_save({"api_url": (url if url else None)}, local)
     if url:
         print(f"Api url updated to: {url}")
     else:
         print("Api url unset.")
 
-@config_app.command("get-url")
-def config_get_url():
-    """Get the active api server url."""
-    conf = config.cliconf_load() or {}
-    url = conf.get("api_url")
-    if url: print(url)
-
 @config_app.command("debug")
 def config_debug(
-    enabled: bool = typer.Argument(..., help="True to enable debug mode, False to disable.")
-):
+        enabled: bool = typer.Argument(..., help="True to enable debug mode, False to disable."),
+        local: bool = typer.Option(False, "--local", "-l", help="Save config to local repository only.")
+    ):
     """Enable or disable verbose debug output and full crash stack traces."""
-    config.cliconf_save(debug=enabled)
+    config.conf_save({"debug": enabled}, local)
     status = "[bold green]enabled[/bold green]" if enabled else "[bold yellow]disabled[/bold yellow]"
     print(f"Debug mode {status}.")
 

@@ -48,12 +48,18 @@ pip install git-glimpse-cli
 
 GitGlimpse CLI uses holds your configuration at `~/.config/glimpsecli/config.json`, and local repository settings are stored at `./.shared-repo.json`.
 
+Configuration hierarchy:
+
+```
+Most important -> Local repo config -> Global cli config
+```
+
 ### Advanced Settings
 
-| Command                  | Description                                                                 |
-| ------------------------ | --------------------------------------------------------------------------- |
-| `glimpse config debug`   | Enables verbose debug mode, printing stack traces.                          |
-| `glimpse config set-url` | Overrides the default production server with a custom backend or localhost. |
+| Command                | Description                                                                 |
+| ---------------------- | --------------------------------------------------------------------------- |
+| `glimpse config debug` | Enables verbose debug mode, printing stack traces.                          |
+| `glimpse config url`   | Overrides the default production server with a custom backend or localhost. |
 
 ## Development
 
@@ -65,7 +71,7 @@ GitGlimpse CLI uses holds your configuration at `~/.config/glimpsecli/config.jso
     source .venv/bin/activate
     pip install -e .
     ```
-2. Point the CLI to your local development server:
+2. Point the CLI to your local development server (use `--local` to not propagate over your real global config):
     ```bash
-    glimpse config set-url http://localhost:5000
+    glimpse config url http://localhost:5000 --local
     ```

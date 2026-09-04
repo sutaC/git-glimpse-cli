@@ -1,30 +1,23 @@
+from functools import partial
 from typing import TypedDict
 from pathlib import Path
 import json
-import os
 
 CLI_CONFIG_DIR = Path.home() / ".config" / "glimpsecli"
 CLI_CONFIG_FILE = CLI_CONFIG_DIR / "config.json"
 CONFIG_FILENAME = ".shared-repo.json"
 DEFAULT_API_URL = "https://gitglimpse.sutac.pl"
 
-# --- repository config
-class RepoConfig(TypedDict):
+class CliConfig(TypedDict, total=False):
+    token: str
+    api_url: str
+    debug: bool
+
+class RepoConfig(CliConfig, total=False):
     repo_id: str
 
-def repoconf_save(repo_id: str, path: Path = Path(".")) -> None:
-    """Saves repository config to file.
-    
-    Args:
-        repo_id: Repository GitGlimpse id.
-        path: Path to directory holding config file.    
-    """
-    config_path = path / CONFIG_FILENAME
-    conf: RepoConfig = {"repo_id": repo_id}
-    with open(config_path, "w") as f:
-        json.dump(conf, f, indent=2)
-
-def repoconf_load(path: Path = Path(".")) -> RepoConfig | None:
+# --- repository config
+def _repoconf_load() -> RepoConfig | None:
     """Loads repository config from file.
     
     Args:
@@ -33,7 +26,7 @@ def repoconf_load(path: Path = Path(".")) -> RepoConfig | None:
     Returns:
         RepoConfig if avaliable, else None.
     """
-    config_path = path / CONFIG_FILENAME
+    config_path = Path(".") / CONFIG_FILENAME
     if not config_path.exists():
         return None
     try:
@@ -42,45 +35,18 @@ def repoconf_load(path: Path = Path(".")) -> RepoConfig | None:
     except Exception:
         return None
 
-def repoconf_remove(path: Path = Path(".")) -> None:
+def repoconf_remove() -> None:
     """Removes repository config file if exists.
     
     Args:
         path: Path to directory holding config file.
     """
-    config_path = path / CONFIG_FILENAME
+    config_path = Path(".") / CONFIG_FILENAME
     config_path.unlink(missing_ok=True)        
 
+
 # --- cli config
-class CliConfig(TypedDict, total=False):
-    token: str
-    api_url: str
-    debug: bool
-
-def cliconf_save(
-        token: str | None = None, 
-        api_url: str | None = None,
-        debug: bool | None = None
-    ) -> None:
-    """Saves or updates cli config safely.
-    
-    Args:
-        token: GitGlimpse api token.
-    """
-    CLI_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    conf = cliconf_load() or {}
-    if token is not None:
-        if token: conf["token"] = token
-        elif "token" in conf: conf.pop("token")
-    if api_url is not None:
-        if api_url: conf["api_url"] = api_url.rstrip("/")
-        elif "api_url" in conf: conf.pop("api_url")
-    if debug is not None:
-        conf["debug"] = debug
-    with open(CLI_CONFIG_FILE, "w") as f:
-        json.dump(conf, f, indent=2)
-
-def cliconf_load() -> CliConfig | None:
+def _cliconf_load() -> CliConfig | None:
     """Loads cli configfrom  file.
     
     Returns:
@@ -98,19 +64,63 @@ def cliconf_remove() -> None:
     """Removes cli config file."""
     CLI_CONFIG_FILE.unlink(missing_ok=True)
 
-def get_api_url() -> str:
-    """Resolves active api url
+# --- conf update
+def conf_save(
+        new_conf: CliConfig | RepoConfig | dict, 
+        local = False
+    ) -> None:
+    """Save configuration in ethier local or global context.
     
-    Returns:
-        Active api url.
+    Args:
+        local: If True saves config to local context, else saves in global context.
     """
-    if conf := cliconf_load():
+    if local:
+        conf = _repoconf_load() or {}
+        conf_file = Path(".") / CONFIG_FILENAME
+    else:
+        CLI_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        conf = _cliconf_load() or {}
+        conf_file = CLI_CONFIG_FILE
+    for key, val in new_conf.items():
+        if val is not None:
+            conf[key] = val
+        elif key in conf:
+            conf.pop(key)
+    with open(conf_file, "w") as f:
+        json.dump(conf, f, indent=2)
+
+# --- config getters
+def get_api_url() -> str:
+    """Returns active api url."""
+    if conf := _repoconf_load():
+        if user_url := conf.get("api_url"):
+            return user_url.rstrip("/")
+    if conf := _cliconf_load():
         if user_url := conf.get("api_url"):
             return user_url.rstrip("/")
     return DEFAULT_API_URL
 
 def get_debug_mode() -> bool:
     """Returns True if debug is enabled in user config, else False."""
-    if conf := cliconf_load():
+    if conf := _repoconf_load():
+        if debug := conf.get("debug") is not None:
+            return debug 
+    if conf := _cliconf_load():
         return conf.get("debug", False)
     return False
+
+def get_repo_id() -> str | None:
+    """Returns current repo_id."""
+    if conf := _repoconf_load():
+        return conf.get("repo_id")
+    return None
+
+def get_token() -> str | None:
+    """Returns current user cli token."""
+    if conf := _repoconf_load():
+        if token := conf.get("token"):
+            return token
+    if conf := _cliconf_load():
+        if token := conf.get("token"):
+            return token
+    return None

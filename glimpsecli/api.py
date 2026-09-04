@@ -28,7 +28,7 @@ def request_api(
         Response from api.
     """
     if not token:
-        token = helpers.get_token()
+        token = helpers.fget_token()
     url = f"{config.get_api_url()}{endpoint}"
     with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True) if not quiet else nullcontext() as progress:
         if progress: 
@@ -52,7 +52,6 @@ def request_api(
             error = response.json().get("error")
             if error: print(f"[dim]Error reason: {error}[/dim]")
         except JSONDecodeError: pass
-        config.cliconf_save(token="")
         print("[yellow]Your session has expired. Please run 'glimpse login' again [/yellow].")
         raise typer.Exit(1)
     elif response.status_code == 403:
