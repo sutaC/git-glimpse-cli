@@ -179,11 +179,13 @@ def status():
     """Display status info of current repository."""
     token = helpers.fget_token()
     repo_id = helpers.fget_repo_id()
-    response = api.request_api(f"/cli/repos/build/{repo_id}/status", token=token)
-    data = response.json()
-    build_status =  data.get("status", "")
+    response = api.request_api(f"/cli/repos/status/{repo_id}", token=token)
+    data: api.StatusResponse = response.json()
     print(f"Repository id: [dark_cyan]{repo_id}[/dark_cyan]")
-    print(f"Build status: {utils.enrich_status(build_status)}")
+    print(f"Build status: {utils.enrich_status(data.get('status'))}")
+    if data.get("code"): print(f"Build code: [dark_red]{data['code']}[/dark_red]")
+    print(f"Build timestamp: [not bold dark_blue]{data.get('timestamp', '?')}[/not bold dark_blue]")
+    print(f"Build size: [not bold dark_blue]{data.get('size', '?')}[/not bold dark_blue]")
     print(f"Repository details: {config.get_api_url()}/repos/details/{repo_id}")
 
 # --- remove

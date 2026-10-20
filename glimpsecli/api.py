@@ -2,10 +2,19 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 from glimpsecli import config, helpers
 from contextlib import nullcontext
 from json import JSONDecodeError
+from typing import TypedDict
 from rich import print
 import typer
 import httpx
 
+# --- Responses
+class StatusResponse(TypedDict):
+    status: str
+    timestamp: str
+    code: str | None
+    size: str
+
+# --- Regests
 def request_api(
         endpoint: str,
         method: str = "GET",
